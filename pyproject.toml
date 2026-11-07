@@ -8,13 +8,14 @@ version = "0.1.0"
 description = "PDFs in Markdown umwandeln, mit automatischer OCR für eingescannte PDFs"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["pymupdf>=1.24", "pymupdf4llm>=0.0.17", "ocrmypdf>=16"]
+dependencies = ["pymupdf>=2.1", "pymupdf4llm>=2.1", "ocrmypdf>=17"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+web = ["fastapi", "uvicorn", "python-multipart"]
+test = ["pytest", "httpx"]
 
 [project.scripts]
 pdf2md = "pdf2md:main"
 
 [tool.setuptools]
-py-modules = ["pdf2md"]
+py-modules = ["pdf2md", "app"]
