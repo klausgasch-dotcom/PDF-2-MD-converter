@@ -197,11 +197,7 @@ async def _process_item(item: Item, lang: str, ocr: str) -> None:
             item.status = "fertig"
         except Exception as exc:  # noqa: BLE001 - nächste Datei trotzdem verarbeiten
             logging.exception("Konvertierung fehlgeschlagen: %s", item.filename)
-            msg = str(exc).replace(str(item.pdf_path), item.filename)
-            if type(exc).__name__ in ("FileDataError", "PdfError", "InputFileError"):
-                msg = "Datei beschädigt oder kein gültiges PDF"
-            elif type(exc).__name__ == "EncryptedPdfError":
-                msg = "PDF ist verschlüsselt/passwortgeschützt"
+            msg = pdf2md.describe_error(exc, item.pdf_path, item.filename)
             item.status, item.error = "fehler", f"Konvertierung fehlgeschlagen: {msg}"
         finally:
             item.pdf_path.unlink(missing_ok=True)

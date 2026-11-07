@@ -1,4 +1,6 @@
-# Start:  docker compose up -d       ->  http://<host>:8000
+# Weboberfläche starten:              docker compose up -d                        -> http://<host>:8000
+# Zusätzlich Hot Folder (z. B. Pi 5): docker compose --profile hotfolder up -d
+#   (oder dauerhaft COMPOSE_PROFILES=hotfolder in die .env-Datei schreiben)
 # Auf dem Raspberry Pi 5 wird automatisch das arm64-Image verwendet.
 services:
   pdf2md:
@@ -18,4 +20,35 @@ services:
       PDF2MD_MAX_PARALLEL: ${PDF2MD_MAX_PARALLEL:-1}
       PDF2MD_DEFAULT_LANG: ${PDF2MD_DEFAULT_LANG:-deu+eng}
     # Pi 5 (4-8 GB RAM): Grenze, damit OCR großer Scans das System nicht blockiert
+    mem_limit: 2g
+
+  # Hot Folder: PDFs in  eingang/  ablegen  ->  .md erscheint in  ausgang/
+  # verarbeitete PDFs landen in  archiv/ , fehlerhafte (mit Begründung) in  fehler/
+  pdf2md-hotfolder:
+    image: ghcr.io/klausgasch-dotcom/pdf-2-md-converter:latest
+    build: .
+    container_name: pdf2md-hotfolder
+    profiles: ["hotfolder"]
+    restart: unless-stopped
+    # Dateien gehören dem Benutzer des Hosts (Pi: meist 1000:1000, prüfen mit `id`)
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command:
+      - python
+      - pdf2md.py
+      - watch
+      - /data/eingang
+      - --output-dir=/data/ausgang
+      - --done-dir=/data/archiv
+      - --failed-dir=/data/fehler
+      - --recursive
+    environment:
+      PDF2MD_DEFAULT_LANG: ${PDF2MD_DEFAULT_LANG:-deu+eng}
+      PDF2MD_WATCH_INTERVAL: ${PDF2MD_WATCH_INTERVAL:-5}
+    volumes:
+      # Ordner auf dem Host vorher anlegen: mkdir -p hotfolder
+      - ${HOTFOLDER_DIR:-./hotfolder}:/data
+    healthcheck:
+      disable: true   # kein Webserver in diesem Dienst
+    # laufende Umwandlung bei "docker compose stop" noch fertig machen lassen
+    stop_grace_period: 2m
     mem_limit: 2g

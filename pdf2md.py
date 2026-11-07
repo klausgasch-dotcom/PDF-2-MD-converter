@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -21,6 +22,21 @@ log = logging.getLogger("pdf2md")
 
 # Seiten mit weniger extrahierbaren Zeichen gelten als "eingescannt".
 MIN_TEXT_CHARS = 25
+
+
+def describe_error(exc: BaseException, path: Path | None = None, name: str | None = None) -> str:
+    """Verständliche Fehlermeldung (ohne interne Pfade) für Benutzer."""
+    kind = type(exc).__name__
+    if kind in ("FileDataError", "PdfError", "InputFileError", "EmptyFileError"):
+        return "Datei beschädigt oder kein gültiges PDF"
+    if kind == "EncryptedPdfError":
+        return "PDF ist verschlüsselt/passwortgeschützt"
+    if kind == "MissingDependencyError":
+        return f"OCR-Programm fehlt ({exc})"
+    msg = str(exc)
+    if path is not None:
+        msg = msg.replace(str(path), name or path.name)
+    return f"{kind}: {msg}" if msg else kind
 
 
 def pages_needing_ocr(pdf_path: Path, min_chars: int = MIN_TEXT_CHARS) -> list[int]:
@@ -106,7 +122,11 @@ def convert(
         markdown = pdf_to_markdown(source)
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(markdown, encoding="utf-8")
+    # Erst in temporäre Datei schreiben, dann umbenennen: Wer den Ausgabeordner
+    # beobachtet (Hot Folder, Sync-Clients), sieht nie eine halbe .md-Datei.
+    part = md_path.with_name(f".{md_path.name}.part")
+    part.write_text(markdown, encoding="utf-8")
+    os.replace(part, md_path)
     log.debug("Geschrieben: %s", md_path)
     return md_path
 
@@ -146,7 +166,7 @@ def _convert_job(pdf: Path, out_dir: Path | None, language: str, ocr: str, overw
     try:
         md = convert(pdf, out_dir, language=language, ocr=ocr, overwrite=overwrite)
     except Exception as exc:  # noqa: BLE001 - Batch soll weiterlaufen
-        return "fehler", f"{type(exc).__name__}: {exc}"
+        return "fehler", describe_error(exc)
     return ("ok", md) if md is not None else ("übersprungen", None)
 
 
@@ -211,8 +231,16 @@ def run_batch(
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["watch"]:
+        import hotfolder
+
+        return hotfolder.main(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="pdf2md",
+        epilog="Hot Folder (Ordner überwachen): pdf2md watch EINGANG -o AUSGANG  "
+        "(Details: pdf2md watch --help)",
         description="Konvertiert PDFs in Markdown (mit OCR für eingescannte PDFs). "
         "Die .md-Datei erhält denselben Namen wie das PDF. Mehrere Dateien und "
         "Ordner werden im Batch verarbeitet.",

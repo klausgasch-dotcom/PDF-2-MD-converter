@@ -18,4 +18,4 @@ test = ["pytest", "httpx"]
 pdf2md = "pdf2md:main"
 
 [tool.setuptools]
-py-modules = ["pdf2md", "app"]
+py-modules = ["pdf2md", "hotfolder", "app"]

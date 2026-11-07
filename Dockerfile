@@ -16,7 +16,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
 RUN pip install -r requirements-web.txt
-COPY pdf2md.py app.py ./
+COPY pdf2md.py hotfolder.py app.py ./
 
 RUN useradd --system --uid 10001 --home-dir /app pdf2md
 USER pdf2md

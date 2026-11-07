@@ -9,6 +9,8 @@ Tool, das PDFs einliest und den Inhalt als Markdown ausgibt – als **Weboberfl�
   Seiten, die bereits Text enthalten, bleiben unverändert (auch gemischte PDFs funktionieren).
 - **Markdown-Struktur:** Überschriften, Listen, Tabellen usw. über
   [PyMuPDF4LLM](https://pymupdf.readthedocs.io/en/latest/pymupdf4llm/).
+- **Hot Folder:** PDFs einfach in einen (Netzwerk-)Ordner legen – die `.md`-Dateien
+  erscheinen automatisch im Ausgangsordner.
 - **Batch-Verarbeitung:** beliebig viele Dateien bzw. ganze Ordner auf einmal – im Web
   mit Fortschrittsanzeige pro Datei, in der Kommandozeile optional parallel. Fehlerhafte
   Dateien brechen den Batch nicht ab, sondern werden am Ende aufgelistet.
@@ -122,6 +124,98 @@ Hinweis: Batches werden im Arbeitsspeicher des Prozesses verwaltet – den Serve
 pip install -r requirements-web.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
+
+## Hot Folder (Ordner überwachen)
+
+Der Hot Folder überwacht einen Eingangsordner. Jede neue PDF-Datei wird automatisch umgewandelt:
+
+```
+hotfolder/
+├── eingang/   ← PDFs hier ablegen (Unterordner erlaubt)
+├── ausgang/   → gleichnamige .md-Dateien (Unterordner werden nachgebildet)
+├── archiv/    → erfolgreich verarbeitete PDFs
+└── fehler/    → fehlgeschlagene PDFs + Name.fehler.txt mit Begründung
+```
+
+- Eine Datei wird erst verarbeitet, wenn sie **fertig kopiert** ist (Größe zwischen zwei
+  Durchläufen unverändert und einige Sekunden alt) – auch große Scans über langsames WLAN
+  sind kein Problem.
+- `.md`-Dateien werden atomar geschrieben (erst temporär, dann umbenannt), d. h. wer den
+  Ausgang beobachtet (z. B. ein Sync-Client), sieht nie halbe Dateien.
+- Versteckte und temporäre Dateien (`.xyz`, `~$xyz`) werden ignoriert.
+- Es wird per Polling abgefragt (Standard alle 5 s) statt über Dateisystem-Events, weil diese
+  bei Netzwerkfreigaben (SMB/NFS) nicht zuverlässig ankommen.
+- Kann ein PDF nach der Umwandlung nicht verschoben werden (fehlende Schreibrechte),
+  wird das gemeldet und die Datei nicht erneut verarbeitet, solange sie unverändert bleibt.
+- `docker compose stop` lässt eine laufende Umwandlung noch fertig laufen.
+
+### Mit Docker (z. B. Raspberry Pi 5)
+
+```bash
+mkdir -p hotfolder                       # als normaler Benutzer anlegen (nicht root)
+docker compose --profile hotfolder up -d # Weboberfläche + Hot Folder
+docker compose logs -f pdf2md-hotfolder  # Protokoll ansehen
+```
+
+Dauerhaft aktivieren: `COMPOSE_PROFILES=hotfolder` in die `.env` schreiben. Weitere
+Einstellungen in `.env`:
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `HOTFOLDER_DIR` | `./hotfolder` | Ordner auf dem Host (darin `eingang/`, `ausgang/`, …) |
+| `PUID`, `PGID` | `1000` | Benutzer/Gruppe, dem die erzeugten Dateien gehören (`id` auf dem Pi) |
+| `PDF2MD_WATCH_INTERVAL` | `5` | Sekunden zwischen zwei Durchläufen |
+| `PDF2MD_DEFAULT_LANG` | `deu+eng` | OCR-Sprache |
+
+Nur den Hot Folder ohne Weboberfläche: `docker compose --profile hotfolder up -d pdf2md-hotfolder`.
+
+### Als Netzwerkordner freigeben (Samba auf dem Pi)
+
+So erscheint der Hot Folder auf Windows/macOS als Netzlaufwerk:
+
+```bash
+sudo apt install samba
+sudo smbpasswd -a pi            # Samba-Passwort für den Benutzer setzen (Benutzername anpassen)
+```
+
+In `/etc/samba/smb.conf` am Ende ergänzen (Pfad anpassen):
+
+```ini
+[pdf2md]
+   path = /home/pi/pdf2md/hotfolder
+   valid users = pi
+   read only = no
+   force user = pi
+   create mask = 0664
+   directory mask = 0775
+```
+
+```bash
+sudo systemctl restart smbd
+```
+
+Dann unter Windows `\\<pi-name>\pdf2md` bzw. unter macOS `smb://<pi-name>/pdf2md` verbinden,
+PDFs in `eingang` ziehen und die Ergebnisse aus `ausgang` holen. `force user` sorgt dafür, dass
+alle Dateien dem Benutzer gehören, unter dem auch der Container läuft (`PUID`/`PGID`).
+
+### Ohne Docker
+
+```bash
+pdf2md watch hotfolder/eingang -o hotfolder/ausgang \
+       --done-dir hotfolder/archiv --failed-dir hotfolder/fehler -r
+```
+
+| Option | Bedeutung |
+|---|---|
+| `-o, --output-dir` | Ausgabeordner (Standard: neben dem PDF) |
+| `--done-dir DIR` | Verarbeitete PDFs dorthin verschieben |
+| `--delete` | Verarbeitete PDFs löschen |
+| (keins von beiden) | PDFs bleiben liegen; erneut verarbeitet wird nur, wenn ein PDF neuer ist als seine `.md` |
+| `--failed-dir DIR` | Fehlgeschlagene PDFs dorthin verschieben (sonst bleiben sie liegen, `.fehler.txt` im Ausgang) |
+| `-r` | Unterordner mit überwachen |
+| `--interval S` / `--settle S` | Abfrageintervall / Mindestalter einer Datei in Sekunden |
+| `--once` | Einmal alles Vorhandene verarbeiten und beenden (z. B. per cron) |
+| `-l`, `--force-ocr`, `--no-ocr`, `-q` | wie beim normalen Aufruf |
 
 ## Kommandozeilen-Tool
 
