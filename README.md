@@ -9,12 +9,23 @@ Tool, das PDFs einliest und den Inhalt als Markdown ausgibt – als **Weboberfl�
   Seiten, die bereits Text enthalten, bleiben unverändert (auch gemischte PDFs funktionieren).
 - **Markdown-Struktur:** Überschriften, Listen, Tabellen usw. über
   [PyMuPDF4LLM](https://pymupdf.readthedocs.io/en/latest/pymupdf4llm/).
-- Einzelne Dateien oder ganze Ordner (optional rekursiv).
+- **Batch-Verarbeitung:** beliebig viele Dateien bzw. ganze Ordner auf einmal – im Web
+  mit Fortschrittsanzeige pro Datei, in der Kommandozeile optional parallel. Fehlerhafte
+  Dateien brechen den Batch nicht ab, sondern werden am Ende aufgelistet.
 
 ## Web-Version (Docker)
 
-Die Weboberfläche (`app.py`) bietet Upload per Drag & Drop. Eine PDF-Datei liefert eine
-gleichnamige `.md`-Datei zurück, mehrere Dateien eine ZIP-Datei mit gleichnamigen `.md`-Dateien.
+Die Weboberfläche (`app.py`) nimmt beliebig viele PDFs auf einmal entgegen – per Dateiauswahl
+oder Drag & Drop, auch ganze Ordner. Der Batch wird im Hintergrund abgearbeitet; die Seite zeigt
+den Upload- und Umwandlungsfortschritt sowie den Status jeder Datei. Danach:
+
+- **eine Datei** → gleichnamige `.md` wird direkt heruntergeladen
+- **mehrere Dateien** → ZIP mit gleichnamigen `.md`-Dateien (jede Datei ist zusätzlich einzeln
+  herunterladbar). Gleichnamige PDFs werden zu `Name.md`, `Name (2).md`, …
+- **fehlerhafte Dateien** (kein PDF, beschädigt, zu groß, verschlüsselt) werden übersprungen,
+  in der Liste rot markiert und im ZIP in `_FEHLER.txt` aufgeführt
+
+Ergebnisse werden nach `PDF2MD_JOB_TTL_MIN` Minuten automatisch gelöscht.
 
 Das Docker-Image ist Multi-Arch (**linux/amd64** und **linux/arm64**) – dasselbe Image läuft
 beim Webhoster und auf dem **Raspberry Pi 5** (64-Bit Raspberry Pi OS).
@@ -45,7 +56,8 @@ dem Zielrechner bauen: `docker compose up -d --build`.
 |---|---|---|
 | `PDF2MD_USER`, `PDF2MD_PASSWORD` | leer | Aktiviert HTTP-Basic-Auth. **Bei öffentlichem Hosting unbedingt setzen.** |
 | `PDF2MD_MAX_UPLOAD_MB` | `50` | Maximale Größe pro PDF |
-| `PDF2MD_MAX_FILES` | `20` | Maximale Anzahl Dateien pro Anfrage |
+| `PDF2MD_MAX_FILES` | `100` | Maximale Anzahl Dateien pro Batch |
+| `PDF2MD_JOB_TTL_MIN` | `60` | Wie lange fertige Batch-Ergebnisse abrufbar bleiben |
 | `PDF2MD_MAX_PARALLEL` | `1` | Gleichzeitige Konvertierungen (OCR ist CPU-intensiv; Pi 5: 1–2) |
 | `PDF2MD_DEFAULT_LANG` | `deu+eng` | Vorausgewählte OCR-Sprache |
 | `PORT` | `8000` | Port im Container (wird von vielen Hostern automatisch gesetzt) |
@@ -77,14 +89,32 @@ belassen. Für Zugriff von außen einen Reverse-Proxy mit HTTPS oder einen Tunne
 
 ### HTTP-API
 
+**Batch (empfohlen, auch für viele/große Dateien – keine Timeouts):**
+
+```bash
+# 1. Batch anlegen -> liefert {"id": "...", ...} sofort zurück
+curl -u admin:geheim -F "files=@a.pdf" -F "files=@b.pdf" -F lang=deu http://localhost:8000/api/jobs
+# 2. Status abfragen (done, counts, Status je Datei)
+curl -u admin:geheim http://localhost:8000/api/jobs/<id>
+# 3. Ergebnis holen: alles als ZIP oder einzelne Datei (Index aus Schritt 2)
+curl -u admin:geheim -OJ http://localhost:8000/api/jobs/<id>/download
+curl -u admin:geheim -OJ http://localhost:8000/api/jobs/<id>/files/0
+# optional sofort löschen
+curl -u admin:geheim -X DELETE http://localhost:8000/api/jobs/<id>
+```
+
+**Synchron (einfach, für wenige Dateien):**
+
 ```bash
 curl -u admin:geheim -F "files=@Brief.pdf" -OJ http://localhost:8000/api/convert          # -> Brief.md
-curl -u admin:geheim -F "files=@a.pdf" -F "files=@b.pdf" -F lang=deu -F ocr=auto \
-     -OJ http://localhost:8000/api/convert                                                # -> markdown.zip
+curl -u admin:geheim -F "files=@a.pdf" -F "files=@b.pdf" -OJ http://localhost:8000/api/convert  # -> markdown.zip
 ```
 
 Parameter: `files` (eine oder mehrere PDFs), `lang` (z. B. `deu+eng`), `ocr` (`auto` | `force` | `off`).
 Interaktive API-Doku: `/api/docs`.
+
+Hinweis: Batches werden im Arbeitsspeicher des Prozesses verwaltet – den Server daher mit
+**einem** Worker betreiben (Standard im Image). Ein Neustart verwirft laufende Batches.
 
 ### Lokal ohne Docker starten
 
@@ -120,7 +150,8 @@ pip install -r requirements.txt
 ```bash
 pdf2md Dokument.pdf                 # erzeugt Dokument.md neben dem PDF
 pdf2md *.pdf -o markdown/           # alle PDFs, Ausgabe in Ordner markdown/
-pdf2md Scans/ -r                    # Ordner rekursiv verarbeiten
+pdf2md Scans/ -r                    # Ordner rekursiv verarbeiten (Batch)
+pdf2md Scans/ -r -o md/ -j 4        # Batch, 4 Dateien parallel, Ordnerstruktur in md/ nachgebildet
 pdf2md Scan.pdf --force-ocr -f      # OCR erzwingen, vorhandene .md überschreiben
 pdf2md Report.pdf -l eng            # OCR-Sprache Englisch
 ```
@@ -129,15 +160,19 @@ Ohne Installation: `python pdf2md.py …`
 
 | Option | Bedeutung |
 |---|---|
-| `-o, --output-dir DIR` | Zielordner (Standard: neben der jeweiligen PDF-Datei) |
+| `-o, --output-dir DIR` | Zielordner (Standard: neben der jeweiligen PDF-Datei). Unterordner werden nachgebildet, damit gleichnamige PDFs sich nicht überschreiben |
 | `-l, --lang LANGS` | Tesseract-Sprachen, z. B. `deu`, `eng`, `deu+eng` (Standard) |
 | `--force-ocr` | OCR auf allen Seiten, auch wenn Text vorhanden ist (z. B. bei schlechter vorhandener Textebene) |
 | `--no-ocr` | Nie OCR ausführen |
 | `-r, --recursive` | Unterordner mit durchsuchen |
+| `-j, --jobs N` | N Dateien parallel verarbeiten (Standard 1; OCR nutzt pro Datei bereits mehrere Kerne) |
 | `-f, --overwrite` | Vorhandene `.md`-Dateien überschreiben (sonst werden sie übersprungen) |
 | `-q, --quiet` | Nur Fehler ausgeben |
 
-Der Exit-Code ist `1`, wenn mindestens eine Datei fehlgeschlagen ist.
+Bei mehreren Dateien wird der Fortschritt (`[3/10] …`) und am Ende eine Zusammenfassung
+ausgegeben (umgewandelt / übersprungen / Fehler, plus Liste der fehlgeschlagenen Dateien).
+Eine fehlerhafte Datei bricht den Batch nicht ab. Der Exit-Code ist `1`, wenn mindestens
+eine Datei fehlgeschlagen ist.
 
 ### Als Python-Bibliothek
 

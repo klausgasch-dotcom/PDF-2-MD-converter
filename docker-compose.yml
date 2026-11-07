@@ -13,9 +13,9 @@ services:
       PDF2MD_USER: ${PDF2MD_USER:-}
       PDF2MD_PASSWORD: ${PDF2MD_PASSWORD:-}
       PDF2MD_MAX_UPLOAD_MB: ${PDF2MD_MAX_UPLOAD_MB:-50}
+      PDF2MD_MAX_FILES: ${PDF2MD_MAX_FILES:-100}
+      PDF2MD_JOB_TTL_MIN: ${PDF2MD_JOB_TTL_MIN:-60}
       PDF2MD_MAX_PARALLEL: ${PDF2MD_MAX_PARALLEL:-1}
       PDF2MD_DEFAULT_LANG: ${PDF2MD_DEFAULT_LANG:-deu+eng}
-    tmpfs:
-      - /tmp:size=1g
     # Pi 5 (4-8 GB RAM): Grenze, damit OCR großer Scans das System nicht blockiert
     mem_limit: 2g
