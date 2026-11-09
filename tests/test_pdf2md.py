@@ -60,3 +60,32 @@ def test_existing_file_not_overwritten(tmp_path):
     assert (tmp_path / "a.md").read_text(encoding="utf-8") == "alt"
     assert pdf2md.convert(pdf, overwrite=True) is not None
     assert "Quartalsbericht" in (tmp_path / "a.md").read_text(encoding="utf-8")
+
+
+def test_batch_cli_keeps_structure_and_continues(tmp_path, caplog):
+    src = tmp_path / "in"
+    (src / "a").mkdir(parents=True)
+    (src / "b").mkdir()
+    make_digital_pdf(src / "a" / "Bericht.pdf")
+    make_digital_pdf(src / "b" / "Bericht.pdf")   # gleicher Name, anderer Ordner
+    make_digital_pdf(src / "Top.pdf")
+    (src / "defekt.pdf").write_bytes(b"%PDF-1.7 kaputt")
+    out = tmp_path / "out"
+
+    with caplog.at_level("INFO", logger="pdf2md"):
+        rc = pdf2md.main([str(src), "-r", "-o", str(out)])
+    assert rc == 1  # eine Datei fehlgeschlagen
+    assert (out / "a" / "Bericht.md").exists()
+    assert (out / "b" / "Bericht.md").exists()
+    assert (out / "Top.md").exists()
+    assert "3 umgewandelt, 0 übersprungen, 1 Fehler (von 4)" in caplog.text
+
+    # zweiter Lauf: alles übersprungen, parallel
+    rc = pdf2md.main([str(src / "a"), str(src / "Top.pdf"), "-o", str(out), "-j", "2"])
+    assert rc == 0
+
+
+def test_collect_dedupes(tmp_path):
+    make_digital_pdf(tmp_path / "x.pdf")
+    pdfs = pdf2md.collect_pdfs([tmp_path, tmp_path / "x.pdf"], recursive=False)
+    assert len(pdfs) == 1
